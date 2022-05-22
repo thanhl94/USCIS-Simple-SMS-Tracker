@@ -11,7 +11,6 @@ async function getNoticeStatus(uscisNoticeId)
     // Init URL
     const uscisRequestUrl = 'https://egov.uscis.gov/casestatus/mycasestatus.do?appReceiptNum='
     const url = uscisRequestUrl + uscisNoticeId
-
     // Init puppeteer
     const browser = await puppeteer.launch()
     const page = await browser.newPage()
@@ -25,11 +24,16 @@ async function getNoticeStatus(uscisNoticeId)
         return Array.from(document.querySelectorAll('.text-center h1')).map(x => x.textContent)
     })
 
+    const caseBodyMessage = await page.evaluate( () => {
+        return Array.from(document.querySelectorAll('.text-center p')).map(x => x.textContent)
+    })
+    
     browser.close()
 
     if(caseStatusRow[0] === caseStatusCenter[0])
     {
-        return caseStatusRow[0]
+        let caseMessages = {status : caseStatusRow[0], body: caseBodyMessage[0]}
+        return caseMessages
     }
     else
     {
@@ -54,79 +58,93 @@ async function writeLog(msg)
     await fs.appendFile('log.txt', writeMsg)
 }
 
+// Send a single message to number
+async function sendToSms(message, number)
+{
+    let smsSendStatus = await sms.sendMessage(message, number)
+    if(smsSendStatus === 'queued')
+    {
+        writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
+        console.log('[STATUS] Notification was sent to the provided number')
+    }
+    else
+    {
+        writeLog('[WARNING] SMS with the message [' + message + '] sent failed')
+    }
+}
+
 async function start(caseId)
 {
     const smsNumber = process.env.SMS_TO
     const msCheckFrequency = process.env.CHECKER_FREQUENCY * 3600000
-    let counts = process.env.CHECKER_DURATION * 2
-    let runIndef = false
+    
+    let days = process.env.CHECKER_DURATION
+    let now = new Date();
+    let lastDay = now.setDate(now.getDate() + days)
     let previousStatus = ''
 
-    if(counts == 0)
+    // Validation. If days is set to negative value, then we treat as indefinitely
+    if(days < 0)
     {
-        runIndef = true
+        days = 0
     }
 
-    while(counts >= 0)
+    while(true)
     {
-        const caseStatus = await getNoticeStatus(caseId)
-        if(Array.isArray(caseStatus))
+        if(days && now > lastDay)
         {
-            writeLog('[WARNING] Case status does not match! Trying again later.')
-            writeLog('[WARNING] Case status 1: ' + caseStatus[0])
-            writeLog('[WARNING] Case status 2: ' + caseStatus[1])
+            return 0
         }
-        else if(caseStatus)
+
+        const respondMessage = await getNoticeStatus(caseId)
+        if(Array.isArray(respondMessage))
         {
-            if(previousStatus != caseStatus)
+            let logMessage = '[STATUS] Case status does not match! Trying again later'
+            console.log(logMessage)
+            writeLog(logMessage)
+            writeLog('[WARNING] Case status 1: ' + respondMessage[0])
+            writeLog('[WARNING] Case status 2: ' + respondMessage[1])
+        }
+        else if(respondMessage)
+        {
+            let caseStatusMessage = respondMessage.status
+            let caseBodyMessage = respondMessage.body
+            if(previousStatus != caseStatusMessage)
             {
-                let message = 'The case ID: ' + caseId + ' was updated to [' + caseStatus + ']'
-                writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatus)
+                let sendStatusMessage = 'Case ID: ' + caseId + ' was updated to [' + caseStatusMessage + ']'
+                let sendBodyMessage = 'With a message [' + caseBodyMessage + ']'
+                writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatusMessage)
+                writeLog('[STATUS] Case updated with the body message: ' + sendBodyMessage)
+                console.log('[STATUS] Case has a new status!')
                 if(smsNumber)
                 {
-                    let smsSendStatus = await sms.sendMessage(message, smsNumber)
-                    if(smsSendStatus === 'queued')
-                    {
-                        writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
-                    }
-                    else
-                    {
-                        writeLog('[WANING] SMS with the message [' + message + '] sent failed')
-                    }
+                    await sendToSms(sendStatusMessage, smsNumber)
+                    await sleep(500)
+                    await sendToSms(sendBodyMessage, smsNumber)
                 }
-                previousStatus = caseStatus
+                previousStatus = caseStatusMessage
             }
             else
             {
-                writeLog('[STATUS] Received status: ' + caseStatus)
+                writeLog('[STATUS] Received status: ' + caseStatusMessage)
             }
         }
         else
         {
             let message = 'Server failed to get a respond.'
-            let smsSendStatus = await sms.sendMessage(message, smsNumber)
-            if(smsSendStatus === 'queued')
+            if(smsNumber)
             {
-                writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
+                sendToSms(message, smsNumber)
             }
-            else
-            {
-                writeLog('[WANING] SMS with the message [' + message + '] sent failed')
-            }
+            let logMessage = '[ERROR] Cannot get status from USCIS'
+            console.log(logMessage)
+            writeLog(logMessage)
+            writeLog('[ERROR] Received: ' + respondMessage)
 
-            writeLog('[ERROR] Cannot get status from USCIS')
-            writeLog('[ERROR] Received: ' + caseStatus)
-            console.log('[' + counts + '] Program stopped due to an error. Check log.txt')
-
-            break
+            return 1
         }
-        console.log('[' + counts + '] Program is running, waiting to check again...')
-
-        // Check if run indefinitely
-        if(!runIndef)
-        {
-            counts -= 1
-        }
+        
+        console.log('[STATUS] Program is running, waiting to check again...')
 
         // Wait 12 hours and check again
         await sleep(msCheckFrequency)
