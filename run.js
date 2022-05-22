@@ -65,31 +65,43 @@ async function sendToSms(message, number)
     if(smsSendStatus === 'queued')
     {
         writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
+        console.log('[STATUS] Notification was sent to the provided number')
     }
     else
     {
         writeLog('[WARNING] SMS with the message [' + message + '] sent failed')
     }
 }
+
 async function start(caseId)
 {
     const smsNumber = process.env.SMS_TO
     const msCheckFrequency = process.env.CHECKER_FREQUENCY * 3600000
-    let counts = process.env.CHECKER_DURATION * 2
-    let runIndef = false
+    
+    let days = process.env.CHECKER_DURATION
+    let now = new Date();
+    let lastDay = now.setDate(now.getDate() + days)
     let previousStatus = ''
 
-    if(counts == 0)
+    // Validation. If days is set to negative value, then we treat as indefinitely
+    if(days < 0)
     {
-        runIndef = true
+        days = 0
     }
 
-    while(counts >= 0)
+    while(true)
     {
+        if(days && now > lastDay)
+        {
+            return 0
+        }
+
         const respondMessage = await getNoticeStatus(caseId)
         if(Array.isArray(respondMessage))
         {
-            writeLog('[WARNING] Case status does not match! Trying again later.')
+            let logMessage = '[STATUS] Case status does not match! Trying again later'
+            console.log(logMessage)
+            writeLog(logMessage)
             writeLog('[WARNING] Case status 1: ' + respondMessage[0])
             writeLog('[WARNING] Case status 2: ' + respondMessage[1])
         }
@@ -102,10 +114,13 @@ async function start(caseId)
                 let sendStatusMessage = 'Case ID: ' + caseId + ' was updated to [' + caseStatusMessage + ']'
                 let sendBodyMessage = 'With a message [' + caseBodyMessage + ']'
                 writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatusMessage)
+                writeLog('[STATUS] Case updated with the body message: ' + sendBodyMessage)
+                console.log('[STATUS] Case has a new status!')
                 if(smsNumber)
                 {
-                    sendToSms(sendStatusMessage, smsNumber)
-                    sendToSms(sendBodyMessage, smsNumber)
+                    await sendToSms(sendStatusMessage, smsNumber)
+                    await sleep(500)
+                    await sendToSms(sendBodyMessage, smsNumber)
                 }
                 previousStatus = caseStatusMessage
             }
@@ -121,20 +136,15 @@ async function start(caseId)
             {
                 sendToSms(message, smsNumber)
             }
-
-            writeLog('[ERROR] Cannot get status from USCIS')
-            writeLog('[ERROR] Received: ' + caseStatus)
-            console.log('[' + counts + '] Program stopped due to an error. Check log.txt')
+            let logMessage = '[ERROR] Cannot get status from USCIS'
+            console.log(logMessage)
+            writeLog(logMessage)
+            writeLog('[ERROR] Received: ' + respondMessage)
 
             return 1
         }
-        console.log('[' + counts + '] Program is running, waiting to check again...')
-
-        // Check if run indefinitely
-        if(!runIndef)
-        {
-            counts -= 1
-        }
+        
+        console.log('[STATUS] Program is running, waiting to check again...')
 
         // Wait 12 hours and check again
         await sleep(msCheckFrequency)
