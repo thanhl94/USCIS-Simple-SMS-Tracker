@@ -11,7 +11,6 @@ async function getNoticeStatus(uscisNoticeId)
     // Init URL
     const uscisRequestUrl = 'https://egov.uscis.gov/casestatus/mycasestatus.do?appReceiptNum='
     const url = uscisRequestUrl + uscisNoticeId
-
     // Init puppeteer
     const browser = await puppeteer.launch()
     const page = await browser.newPage()
@@ -25,11 +24,16 @@ async function getNoticeStatus(uscisNoticeId)
         return Array.from(document.querySelectorAll('.text-center h1')).map(x => x.textContent)
     })
 
+    const caseBodyMessage = await page.evaluate( () => {
+        return Array.from(document.querySelectorAll('.text-center p')).map(x => x.textContent)
+    })
+    
     browser.close()
 
     if(caseStatusRow[0] === caseStatusCenter[0])
     {
-        return caseStatusRow[0]
+        let caseMessages = {status : caseStatusRow[0], body: caseBodyMessage[0]}
+        return caseMessages
     }
     else
     {
@@ -54,6 +58,19 @@ async function writeLog(msg)
     await fs.appendFile('log.txt', writeMsg)
 }
 
+// Send a single message to number
+async function sendToSms(message, number)
+{
+    let smsSendStatus = await sms.sendMessage(message, number)
+    if(smsSendStatus === 'queued')
+    {
+        writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
+    }
+    else
+    {
+        writeLog('[WARNING] SMS with the message [' + message + '] sent failed')
+    }
+}
 async function start(caseId)
 {
     const smsNumber = process.env.SMS_TO
@@ -69,56 +86,47 @@ async function start(caseId)
 
     while(counts >= 0)
     {
-        const caseStatus = await getNoticeStatus(caseId)
-        if(Array.isArray(caseStatus))
+        const respondMessage = await getNoticeStatus(caseId)
+        if(Array.isArray(respondMessage))
         {
             writeLog('[WARNING] Case status does not match! Trying again later.')
-            writeLog('[WARNING] Case status 1: ' + caseStatus[0])
-            writeLog('[WARNING] Case status 2: ' + caseStatus[1])
+            writeLog('[WARNING] Case status 1: ' + respondMessage[0])
+            writeLog('[WARNING] Case status 2: ' + respondMessage[1])
         }
-        else if(caseStatus)
+        else if(respondMessage)
         {
-            if(previousStatus != caseStatus)
+            let caseStatusMessage = respondMessage.status
+            let caseBodyMessage = respondMessage.body
+            if(previousStatus != caseStatusMessage)
             {
-                let message = 'The case ID: ' + caseId + ' was updated to [' + caseStatus + ']'
-                writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatus)
+                let sendStatusMessage = 'Case ID: ' + caseId + ' was updated to [' + caseStatusMessage + ']'
+                let sendBodyMessage = 'With a message [' + caseBodyMessage + ']'
+                writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatusMessage)
                 if(smsNumber)
                 {
-                    let smsSendStatus = await sms.sendMessage(message, smsNumber)
-                    if(smsSendStatus === 'queued')
-                    {
-                        writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
-                    }
-                    else
-                    {
-                        writeLog('[WANING] SMS with the message [' + message + '] sent failed')
-                    }
+                    sendToSms(sendStatusMessage, smsNumber)
+                    sendToSms(sendBodyMessage, smsNumber)
                 }
-                previousStatus = caseStatus
+                previousStatus = caseStatusMessage
             }
             else
             {
-                writeLog('[STATUS] Received status: ' + caseStatus)
+                writeLog('[STATUS] Received status: ' + caseStatusMessage)
             }
         }
         else
         {
             let message = 'Server failed to get a respond.'
-            let smsSendStatus = await sms.sendMessage(message, smsNumber)
-            if(smsSendStatus === 'queued')
+            if(smsNumber)
             {
-                writeLog('[STATUS] SMS with the message [' + message + '] sent succesfully')
-            }
-            else
-            {
-                writeLog('[WANING] SMS with the message [' + message + '] sent failed')
+                sendToSms(message, smsNumber)
             }
 
             writeLog('[ERROR] Cannot get status from USCIS')
             writeLog('[ERROR] Received: ' + caseStatus)
             console.log('[' + counts + '] Program stopped due to an error. Check log.txt')
 
-            break
+            return 1
         }
         console.log('[' + counts + '] Program is running, waiting to check again...')
 
