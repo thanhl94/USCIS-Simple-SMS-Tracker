@@ -16,33 +16,24 @@ async function getNoticeStatus(uscisNoticeId)
     const page = await browser.newPage()
     await page.goto(url)
 
-    const caseStatusRow = await page.evaluate( () => {
-        return Array.from(document.querySelectorAll('.rows h1')).map(x => x.textContent)
-    })
-
-    const caseStatusCenter = await page.evaluate( () => {
-        return Array.from(document.querySelectorAll('.text-center h1')).map(x => x.textContent)
+    const caseStatusHeader = await page.evaluate( () => {
+        return Array.from(document.querySelectorAll('.rows.text-center h1')).map(x => x.textContent)
     })
 
     const caseBodyMessage = await page.evaluate( () => {
-        return Array.from(document.querySelectorAll('.text-center p')).map(x => x.textContent)
+        return Array.from(document.querySelectorAll('.rows.text-center p')).map(x => x.textContent)
     })
     
     browser.close()
 
-    if(caseStatusRow[0] === caseStatusCenter[0])
+    // If it has something, either or then update
+    if(caseStatusHeader || caseBodyMessage)
     {
-        let caseMessages = {status : caseStatusRow[0], body: caseBodyMessage[0]}
+        let caseMessages = {status : caseStatusHeader[0], body: caseBodyMessage[0]}
         return caseMessages
     }
-    else
-    {
-        let arrayStatus = Array()
-        arrayStatus.push(caseStatusRow[0])
-        arrayStatus.push(caseStatusCenter[0])
-
-        return arrayStatus
-    }
+    
+    return undefined
 }
 
 function sleep(ms) {
@@ -58,7 +49,7 @@ async function writeLog(msg)
     await fs.appendFile('log.txt', writeMsg)
 }
 
-// Send a single message to number
+// Send a single message to the  provided number
 async function sendToSms(message, number)
 {
     let smsSendStatus = await sms.sendMessage(message, number)
@@ -97,15 +88,7 @@ async function start(caseId)
         }
 
         const respondMessage = await getNoticeStatus(caseId)
-        if(Array.isArray(respondMessage))
-        {
-            let logMessage = '[STATUS] Case status does not match! Trying again later'
-            console.log(logMessage)
-            writeLog(logMessage)
-            writeLog('[WARNING] Case status 1: ' + respondMessage[0])
-            writeLog('[WARNING] Case status 2: ' + respondMessage[1])
-        }
-        else if(respondMessage)
+        if(respondMessage)
         {
             let caseStatusMessage = respondMessage.status
             let caseBodyMessage = respondMessage.body
@@ -113,15 +96,23 @@ async function start(caseId)
             {
                 let sendStatusMessage = 'Case ID: ' + caseId + ' was updated to [' + caseStatusMessage + ']'
                 let sendBodyMessage = 'With a message [' + caseBodyMessage + ']'
-                writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatusMessage)
-                writeLog('[STATUS] Case updated with the body message: ' + sendBodyMessage)
-                console.log('[STATUS] Case has a new status!')
-                if(smsNumber)
+                
+                if(process.env.TESTING_CHECKER)
+                {
+                    console.log(caseStatusMessage)
+                    console.log(caseBodyMessage)
+                }
+                else if(smsNumber)
                 {
                     await sendToSms(sendStatusMessage, smsNumber)
                     await sleep(500)
                     await sendToSms(sendBodyMessage, smsNumber)
                 }
+
+                console.log('[STATUS] Case updated!')
+                writeLog('[STATUS] Case updated from ' + previousStatus + ' to ' + caseStatusMessage)
+                writeLog('[STATUS] Case updated with the body message: ' + sendBodyMessage)
+
                 previousStatus = caseStatusMessage
             }
             else
@@ -132,22 +123,30 @@ async function start(caseId)
         else
         {
             let message = 'Server failed to get a respond.'
+
             if(smsNumber)
             {
                 sendToSms(message, smsNumber)
             }
+
             let logMessage = '[ERROR] Cannot get status from USCIS'
             console.log(logMessage)
             writeLog(logMessage)
             writeLog('[ERROR] Received: ' + respondMessage)
-
+            
             return 1
         }
-        
-        console.log('[STATUS] Program is running, waiting to check again...')
 
-        // Wait 12 hours and check again
-        await sleep(msCheckFrequency)
+        if(process.env.TESTING_CHECKER)
+        {
+            console.log('In testing mode, now exiting.')
+            break
+        }
+        else
+        {
+            console.log('[STATUS] Program is running, waiting to check again...')
+            await sleep(msCheckFrequency)
+        }
     }
 }
 
