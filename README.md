@@ -32,3 +32,12 @@ e.g. 12 to check for every 12 hours.
 Leave TWILIO_XXX variables empty to disable SMS sending. \
 Otherwise, just sign up on Twilio for free to get all the required variables.
 
+# Next
+- Check and install dependencies to run in start.sh (https://gist.github.com/winuxue/cfef08e2f5fe9dfc16a1d67a4ad38a01)
+- Handle multiple USCIS cases
+- Email services
+- Better error handling
+- Database access for log and services
+- Handle multiple users
+- Mobile app utilizing DB
+- Comments
