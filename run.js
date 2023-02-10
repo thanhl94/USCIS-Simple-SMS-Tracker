@@ -5,18 +5,27 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs/promises');
 const sms = require('./sms.js');
+const { exit } = require('process');
+const { stringify } = require('querystring');
 
 
 
 async function getNoticeStatus(uscisNoticeId)
 {
     // Init URL
-    const uscisRequestUrl = 'https://egov.uscis.gov/casestatus/mycasestatus.do?appReceiptNum=';
-    const url = uscisRequestUrl + uscisNoticeId;
+    const uscisRequestUrl = 'https://egov.uscis.gov/casestatus/landing.do';
+    // const uscisRequestUrl = 'https://egov.uscis.gov/casestatus/mycasestatus.do?appReceiptNum=';
+    // const url = uscisRequestUrl + uscisNoticeId;
+    const url = uscisRequestUrl;
     // Init puppeteer
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
     await page.goto(url);
+
+    await page.waitForSelector('input[name="appReceiptNum"]');
+    await page.$eval('input[name="appReceiptNum"]', (el, uscisNoticeId) => {el.value = uscisNoticeId}, uscisNoticeId);
+    await page.click('input[type="submit"]');
+    await page.waitForSelector('div[class="close-icon"]');
 
     const caseStatusHeader = await page.evaluate( () => {
         return Array.from(document.querySelectorAll('.rows.text-center h1')).map(x => x.textContent);
@@ -25,7 +34,7 @@ async function getNoticeStatus(uscisNoticeId)
     const caseBodyMessage = await page.evaluate( () => {
         return Array.from(document.querySelectorAll('.rows.text-center p')).map(x => x.textContent);
     })
-    
+
     browser.close()
 
     // If it has something, either or then update
